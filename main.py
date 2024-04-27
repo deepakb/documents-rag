@@ -2,8 +2,6 @@ import os
 import uuid
 import datetime
 import shutil
-import tiktoken
-from dotenv import load_dotenv, find_dotenv
 from typing import List
 from fastapi import FastAPI, File, UploadFile
 from langchain_community.document_loaders import TextLoader, PyPDFLoader, UnstructuredPowerPointLoader, Docx2txtLoader, UnstructuredWordDocumentLoader
@@ -13,18 +11,10 @@ from langchain_core.documents import Document
 from pymongo import MongoClient
 
 from database import MongoDBAtlasClient
-
-# Load .env variable
-load_dotenv(find_dotenv())
+from utils import check_file_type, get_token_counts, get_env_variable
 
 # Initialize FastAPI app
 app = FastAPI()
-
-def get_env_variable(var_name: str) -> str:
-    value = os.getenv(var_name)
-    if value is None:
-        raise ValueError(f"Environment variable '{var_name}' not found.")
-    return value
 
 # Initialize OpenAIEmbeddings
 embeddings = OpenAIEmbeddings(
@@ -33,22 +23,8 @@ embeddings = OpenAIEmbeddings(
     openai_api_key=get_env_variable('OPENAI_API_KEY')
 )
 
-# Define encoding
-encoding = tiktoken.encoding_for_model('gpt-3.5-turbo')
-
 # MongoDB Atlas integration (Replace placeholders with your MongoDB Atlas connection details)
 client = MongoDBAtlasClient(get_env_variable('MONGODB_URI'), 'documents_rag')
-
-# Define a function to check if the file type is valid
-def check_file_type(filename: str) -> bool:
-    valid_extensions = ['txt', 'docx', 'doc', 'pdf', 'ppt']
-    file_extension = filename.split(".")[-1]
-    return file_extension in valid_extensions
-
-# Return the number of tokens in a text string
-def get_token_counts(string: str) -> int:
-    num_tokens = len(encoding.encode(string))
-    return num_tokens
 
 # Define a function to parse text from various document formats
 async def parse_document(file: str, file_extension: str) -> List[Document]:
@@ -75,11 +51,10 @@ async def split_text_into_chunks(text: str, chunk_size: int) -> List[str]:
     return chunks
 
 # Define a function to embed text into vectors using Langchain
-async def embed_text(documents: List[Document], request_id: str, file_id: str, file_name: str):
+async def create_embedding(documents: List[Document], request_id: str, file_id: str, file_name: str):
     all_texts = [d.page_content for d in documents]
     all_tokens = sum([get_token_counts(d) for d in all_texts])
-    # We are keeping higher than normal chunk sizes since we want to load this quickly.
-    # The 8100 is due to the limit of the embedding model which is 8192
+    # model limit is 8192
     chunk_size = all_tokens if all_tokens < 8100 else 8100
     chunks = await split_text_into_chunks(all_texts, chunk_size);
 
@@ -130,8 +105,8 @@ async def upload_documents(files: List[UploadFile] = File(...)):
             # Parse text from the uploaded document and split into chunks
             documents = await parse_document(full_file_path, file_extension)
 
-            # Embed the parsed text into vectors
-            vectors = await embed_text(documents, request_id, file_id, file.filename)
+            # Create embedding for the documents
+            vectors = await create_embedding(documents, request_id, file_id, file.filename)
 
             # Store the embedded vectors in MongoDB Atlas
             client.insert_documents('files', vectors)
