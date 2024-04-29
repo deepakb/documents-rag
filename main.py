@@ -3,30 +3,29 @@ import uuid
 import datetime
 import shutil
 from typing import List
-from fastapi import FastAPI, File, UploadFile
+from fastapi import FastAPI, File, UploadFile, HTTPException
 from langchain_community.document_loaders import TextLoader, PyPDFLoader, UnstructuredPowerPointLoader, Docx2txtLoader, UnstructuredWordDocumentLoader
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_openai import OpenAIEmbeddings
 from langchain_core.documents import Document
-from pymongo import MongoClient
 
 from database import MongoDBAtlasClient
 from utils import check_file_type, get_token_counts, get_env_variable
+from openai_client import OpenAIClient
+
+DB_NAME = 'documents_rag'
+COLLECTION_NAME = 'files'
 
 # Initialize FastAPI app
 app = FastAPI()
 
-# Initialize OpenAIEmbeddings
-embeddings = OpenAIEmbeddings(
-    model="text-embedding-3-large",
-    dimensions=1024,
-    openai_api_key=get_env_variable('OPENAI_API_KEY')
-)
+# Intialize OpenAIClient
+openai = OpenAIClient(get_env_variable('OPENAI_API_KEY'))
 
-# MongoDB Atlas integration (Replace placeholders with your MongoDB Atlas connection details)
-client = MongoDBAtlasClient(get_env_variable('MONGODB_URI'), 'documents_rag')
+# Initialize MongoDB Atlas client
+client = MongoDBAtlasClient(get_env_variable('MONGODB_URI'), DB_NAME)
 
-# Define a function to parse text from various document formats
+
 async def parse_document(file: str, file_extension: str) -> List[Document]:
     if file_extension == "pdf":
         loader = PyPDFLoader(file)
@@ -43,20 +42,13 @@ async def parse_document(file: str, file_extension: str) -> List[Document]:
     documents = loader.load()
     return documents
 
-async def split_text_into_chunks(text: str, chunk_size: int) -> List[str]:
-    splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
-        encoding_name="cl100k_base", chunk_size=chunk_size, chunk_overlap=0
-    )
-    chunks = splitter.split_text("\n".join(text))
-    return chunks
 
-# Define a function to embed text into vectors using Langchain
-async def create_embedding(documents: List[Document], request_id: str, file_id: str, file_name: str):
+async def get_embedding(documents: List[Document], request_id: str, file_id: str, file_name: str):
     all_texts = [d.page_content for d in documents]
     all_tokens = sum([get_token_counts(d) for d in all_texts])
     # model limit is 8192
     chunk_size = all_tokens if all_tokens < 8100 else 8100
-    chunks = await split_text_into_chunks(all_texts, chunk_size);
+    chunks = await openai.split_text_into_chunks(all_texts, chunk_size)
 
     created_at = datetime.datetime.now()
     expires_at = created_at + datetime.timedelta(days=1)
@@ -64,22 +56,18 @@ async def create_embedding(documents: List[Document], request_id: str, file_id: 
     text_chunks = []
     doc_id = 1
     for chunk in chunks:
-        uniqie_id = request_id + '-' +  str(doc_id)
+        uniqie_id = request_id + '-' + str(doc_id)
         token_count = get_token_counts(chunk)
-        vector_text = embeddings.embed_documents([chunk])
-        text_chunks.append({ "chunk_id": uniqie_id, "file_id": file_id, "file_name": file_name.replace(' ', '_'), "raw_chunk": chunk, "vector_chunk": vector_text, "token_count": token_count, "created_at": created_at, "expires_at": expires_at })
+        vector_text = openai.create_embedding(chunk)
+        text_chunks.append({"chunk_id": uniqie_id, "file_id": file_id, "file_name": file_name.replace(
+            ' ', '_'), "raw_chunk": chunk, "vector_chunk": vector_text, "token_count": token_count, "created_at": created_at, "expires_at": expires_at})
         doc_id += 1
 
     return text_chunks
 
-# Define the ping endpoint to make sure API is working
-@app.get("/ping/")
-async def ping():
-    return { 'status': 'success', 'message': 'pong' }
 
-# Define the document upload endpoint
-@app.post("/upload/")
-async def upload_documents(files: List[UploadFile] = File(...)):
+@app.post("/add-documents/")
+async def add_documents(files: List[UploadFile] = File(...)):
     results = []
     for file in files:
         try:
@@ -96,7 +84,7 @@ async def upload_documents(files: List[UploadFile] = File(...)):
                 os.makedirs(folder_path)
             full_file_path = os.path.join(folder_path, file.filename)
 
-             # Save the uploaded file to a temporary location
+            # Save the uploaded file to a temporary location
             with open(full_file_path, "wb") as f:
                 shutil.copyfileobj(file.file, f)
 
@@ -106,10 +94,11 @@ async def upload_documents(files: List[UploadFile] = File(...)):
             documents = await parse_document(full_file_path, file_extension)
 
             # Create embedding for the documents
-            vectors = await create_embedding(documents, request_id, file_id, file.filename)
+            vectors = await get_embedding(documents, request_id, file_id, file.filename)
+            # await client.create_vector_store(openai.embeddings, documents, COLLECTION_NAME)
 
             # Store the embedded vectors in MongoDB Atlas
-            client.insert_documents('files', vectors)
+            client.insert_documents(COLLECTION_NAME, vectors)
 
             # Delete temp folder after it's usage
             try:
@@ -117,8 +106,32 @@ async def upload_documents(files: List[UploadFile] = File(...)):
             except OSError as e:
                 print("Error: %s - %s." % (e.filename, e.strerror))
 
-            results.append({"filename": file.filename, "message": "Document uploaded successfully"})
+            results.append({"filename": file.filename,
+                           "message": "Document uploaded successfully"})
         except ValueError as e:
             results.append({"filename": file.filename, "error": str(e)})
 
     return results
+
+
+@app.delete("/delete-documents/")
+async def delete_documents(document_ids: List[str]):
+    try:
+        # Convert string document IDs to ObjectId
+        object_ids = [str(doc_id) for doc_id in document_ids]
+
+        # Delete documents from MongoDB Atlas
+        deleted_count = client.delete_documents(
+            COLLECTION_NAME, object_ids, 'file_id')
+
+        return {"message": f"{deleted_count} documents deleted successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/chat")
+async def chat(prompt: str, file_id: str):
+    try:
+        response = await openai.chat(prompt, file_id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
