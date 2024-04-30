@@ -12,6 +12,7 @@ from langchain_core.documents import Document
 from database import MongoDBAtlasClient
 from utils import check_file_type, get_token_counts, get_env_variable
 from openai_client import OpenAIClient
+from models import ChatRequest
 
 DB_NAME = 'documents_rag'
 COLLECTION_NAME = 'files'
@@ -26,7 +27,7 @@ openai = OpenAIClient(get_env_variable('OPENAI_API_KEY'))
 client = MongoDBAtlasClient(get_env_variable('MONGODB_URI'), DB_NAME)
 
 
-async def parse_document(file: str, file_extension: str) -> List[Document]:
+async def load_document(file: str, file_extension: str) -> List[Document]:
     if file_extension == "pdf":
         loader = PyPDFLoader(file)
     elif file_extension in ["docx", "doc"]:
@@ -58,7 +59,7 @@ async def get_embedding(documents: List[Document], request_id: str, file_id: str
     for chunk in chunks:
         uniqie_id = request_id + '-' + str(doc_id)
         token_count = get_token_counts(chunk)
-        vector_text = openai.create_embedding(chunk)
+        vector_text = await openai.create_embedding(chunk)
         text_chunks.append({"chunk_id": uniqie_id, "file_id": file_id, "file_name": file_name.replace(
             ' ', '_'), "raw_chunk": chunk, "vector_chunk": vector_text, "token_count": token_count, "created_at": created_at, "expires_at": expires_at})
         doc_id += 1
@@ -91,11 +92,11 @@ async def add_documents(files: List[UploadFile] = File(...)):
             file_extension = file.filename.rsplit('.', 1)[1].lower()
 
             # Parse text from the uploaded document and split into chunks
-            documents = await parse_document(full_file_path, file_extension)
+            documents = await load_document(full_file_path, file_extension)
 
             # Create embedding for the documents
-            vectors = await get_embedding(documents, request_id, file_id, file.filename)
             # await client.create_vector_store(openai.embeddings, documents, COLLECTION_NAME)
+            vectors = await get_embedding(documents, request_id, file_id, file.filename)
 
             # Store the embedded vectors in MongoDB Atlas
             client.insert_documents(COLLECTION_NAME, vectors)
@@ -129,9 +130,13 @@ async def delete_documents(document_ids: List[str]):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.post("/chat")
-async def chat(prompt: str, file_id: str):
+@app.post("/chat/")
+async def chat(chatRequest: ChatRequest):
     try:
-        response = await openai.chat(prompt, file_id)
+        (prompt, file_id) = chatRequest
+        user_prompt = await openai.create_embedding(str(prompt))
+        context = await client.vector_search(COLLECTION_NAME, user_prompt, file_id)
+        response = await openai.chat(prompt, file_id, context)
+        return response
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

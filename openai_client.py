@@ -2,6 +2,7 @@ from langchain_openai import OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
+from typing import List
 
 
 class OpenAIClient:
@@ -29,17 +30,11 @@ class OpenAIClient:
         chunks = splitter.split_text("\n".join(text))
         return chunks
 
-    async def create_embedding(self, text: str):
+    async def create_embedding(self, text: str) -> List[List[float]]:
         vector_text = self.embeddings.embed_documents([text])
         return vector_text
 
-    async def chat(self, prompt: str, file_id: str, max_tokens: int = 50):
-        prompt_template = self.prompt_template.create_prompt(
-            prompt,
-            max_tokens=max_tokens
-        )
-        print(prompt_template)
-
-        return {"status": "success"}
-        # response = await self.llm.invoke(prompt_template)
-        # return response
+    async def chat(self, prompt: str, file_id: str, context, max_tokens: int = 50):
+        f_prompt = self.prompt_template.format(context=context, input=prompt)
+        respone = self.llm.invoke(f_prompt)
+        return respone
