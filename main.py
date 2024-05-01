@@ -4,18 +4,16 @@ import datetime
 import shutil
 from typing import List
 from fastapi import FastAPI, File, UploadFile, HTTPException
-from langchain_community.document_loaders import TextLoader, PyPDFLoader, UnstructuredPowerPointLoader, Docx2txtLoader, UnstructuredWordDocumentLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_openai import OpenAIEmbeddings
 from langchain_core.documents import Document
 
 from database import MongoDBAtlasClient
-from utils import check_file_type, get_token_counts, get_env_variable
+from utils import check_file_type, get_token_counts, get_env_variable, load_document, split_text_into_chunks
 from openai_client import OpenAIClient
+from retriver import VectorRetriever
 from models import ChatRequest
 
 DB_NAME = 'documents_rag'
-COLLECTION_NAME = 'files'
+COLLECTION_NAME = 'documents'
 
 # Initialize FastAPI app
 app = FastAPI()
@@ -25,46 +23,6 @@ openai = OpenAIClient(get_env_variable('OPENAI_API_KEY'))
 
 # Initialize MongoDB Atlas client
 client = MongoDBAtlasClient(get_env_variable('MONGODB_URI'), DB_NAME)
-
-
-async def load_document(file: str, file_extension: str) -> List[Document]:
-    if file_extension == "pdf":
-        loader = PyPDFLoader(file)
-    elif file_extension in ["docx", "doc"]:
-        loader = UnstructuredWordDocumentLoader(file)
-    elif file_extension == "pptx":
-        loader = UnstructuredPowerPointLoader(file)
-    elif file_extension == "txt":
-        loader = TextLoader(file)
-    else:
-        # Handle unsupported file formats
-        raise ValueError("Unsupported file format")
-
-    documents = loader.load()
-    return documents
-
-
-async def get_embedding(documents: List[Document], request_id: str, file_id: str, file_name: str):
-    all_texts = [d.page_content for d in documents]
-    all_tokens = sum([get_token_counts(d) for d in all_texts])
-    # model limit is 8192
-    chunk_size = all_tokens if all_tokens < 8100 else 8100
-    chunks = await openai.split_text_into_chunks(all_texts, chunk_size)
-
-    created_at = datetime.datetime.now()
-    expires_at = created_at + datetime.timedelta(days=1)
-
-    text_chunks = []
-    doc_id = 1
-    for chunk in chunks:
-        uniqie_id = request_id + '-' + str(doc_id)
-        token_count = get_token_counts(chunk)
-        vector_text = await openai.create_embedding(chunk)
-        text_chunks.append({"chunk_id": uniqie_id, "file_id": file_id, "file_name": file_name.replace(
-            ' ', '_'), "raw_chunk": chunk, "vector_chunk": vector_text, "token_count": token_count, "created_at": created_at, "expires_at": expires_at})
-        doc_id += 1
-
-    return text_chunks
 
 
 @app.post("/add-documents/")
@@ -96,7 +54,24 @@ async def add_documents(files: List[UploadFile] = File(...)):
 
             # Create embedding for the documents
             # await client.create_vector_store(openai.embeddings, documents, COLLECTION_NAME)
-            vectors = await get_embedding(documents, request_id, file_id, file.filename)
+            all_texts = [d.page_content for d in documents]
+            all_tokens = sum([get_token_counts(d) for d in all_texts])
+            # model limit is 8192
+            chunk_size = all_tokens if all_tokens < 8100 else 8100
+            chunks = await split_text_into_chunks(all_texts, chunk_size)
+
+            created_at = datetime.datetime.now()
+            expires_at = created_at + datetime.timedelta(days=1)
+
+            vectors = []
+            doc_id = 1
+            for chunk in chunks:
+                uniqie_id = request_id + '-' + str(doc_id)
+                token_count = get_token_counts(chunk)
+                vector_text = await openai.create_embedding(chunk)
+                vectors.append({"chunk_id": uniqie_id, "file_id": file_id, "file_name": file.filename.replace(
+                    ' ', '_'), "raw_chunk": chunk, "vector_chunk": vector_text, "token_count": token_count, "created_at": created_at, "expires_at": expires_at})
+                doc_id += 1
 
             # Store the embedded vectors in MongoDB Atlas
             client.insert_documents(COLLECTION_NAME, vectors)
@@ -133,10 +108,9 @@ async def delete_documents(document_ids: List[str]):
 @app.post("/chat/")
 async def chat(chatRequest: ChatRequest):
     try:
-        (prompt, file_id) = chatRequest
-        user_prompt = await openai.create_embedding(str(prompt))
-        context = await client.vector_search(COLLECTION_NAME, user_prompt, file_id)
-        response = await openai.chat(prompt, file_id, context)
+        (filters) = chatRequest
+        retriver = VectorRetriever(openai, client)
+        response = await retriver.invoke(chatRequest, [COLLECTION_NAME], filters)
         return response
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
