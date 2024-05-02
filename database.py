@@ -72,7 +72,6 @@ class MongoDBAtlasClient:
         result = collection.delete_many({field: {"$in": document_ids}})
         return result.deleted_count
 
-    @staticmethod
     def get(self, collection: str, query: dict, projection: dict, return_type: str = 'single'):
         """
         Retrieve data from a MongoDB collection based on provided parameters.
@@ -97,45 +96,3 @@ class MongoDBAtlasClient:
             result = collection.find(query, projection)
 
         return result
-
-    async def create_vector_store(self, embeddings: OpenAIEmbeddings, data: List[Document], collection_name):
-        try:
-            # print("Creating vector store...")
-            # texts = [d.page_content for d in data]
-            # metadatas = [d.metadata for d in data]
-            # print(texts)
-            # print(metadatas)
-            collection = self.db[collection_name]
-            vectorStore = MongoDBAtlasVectorSearch.from_documents(
-                data, embeddings, collection=collection
-            )
-            print("Vector store created successfully!")
-        except Exception as e:
-            print("An error occurred:", e)
-
-    async def vector_search(self, collection_name, user_prompt, file_id):
-        collection = self.db[collection_name]
-        pipeline = [
-            {
-                '$vectorSearch': {
-                    'index': 'rag',
-                    'path': 'vector_chunk',
-                    'queryVector': user_prompt[0],
-                    'numCandidates': 200,
-                    'limit': 10
-                }
-            }, {
-                '$project': {
-                    '_id': 0,
-                    'raw_chunk': 1,
-                    'score': {
-                        '$meta': 'vectorSearchScore'
-                    }
-                }
-            }
-        ]
-        results = collection.aggregate(pipeline)
-        response = [{'raw_chunk': document['raw_chunk'],
-                     'score': document['score']} for document in results]
-
-        return response[0]['raw_chunk']

@@ -2,6 +2,7 @@ import os
 import uuid
 import datetime
 import shutil
+import json
 from typing import List
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from langchain_core.documents import Document
@@ -53,7 +54,6 @@ async def add_documents(files: List[UploadFile] = File(...)):
             documents = await load_document(full_file_path, file_extension)
 
             # Create embedding for the documents
-            # await client.create_vector_store(openai.embeddings, documents, COLLECTION_NAME)
             all_texts = [d.page_content for d in documents]
             all_tokens = sum([get_token_counts(d) for d in all_texts])
             # model limit is 8192
@@ -70,7 +70,7 @@ async def add_documents(files: List[UploadFile] = File(...)):
                 token_count = get_token_counts(chunk)
                 vector_text = await openai.create_embedding(chunk)
                 vectors.append({"chunk_id": uniqie_id, "file_id": file_id, "file_name": file.filename.replace(
-                    ' ', '_'), "raw_chunk": chunk, "vector_chunk": vector_text, "token_count": token_count, "created_at": created_at, "expires_at": expires_at})
+                    ' ', '_'), "raw_chunk": chunk, "vector_chunk": vector_text[0], "token_count": token_count, "created_at": created_at, "expires_at": expires_at})
                 doc_id += 1
 
             # Store the embedded vectors in MongoDB Atlas
@@ -108,9 +108,13 @@ async def delete_documents(document_ids: List[str]):
 @app.post("/chat/")
 async def chat(chatRequest: ChatRequest):
     try:
-        (filters) = chatRequest
+        api_res = []
         retriver = VectorRetriever(openai, client)
-        response = await retriver.invoke(chatRequest, [COLLECTION_NAME], filters)
-        return response
+        context = await retriver.invoke(chatRequest, [COLLECTION_NAME])
+        context_data = json.loads(context)[0]
+        response = await openai.fetch_chat_response(chatRequest.question, context_data['text'])
+        api_res.append({"question": chatRequest.question,
+                        "message": response})
+        return api_res
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -2,6 +2,10 @@ from langchain_openai import OpenAIEmbeddings
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_openai import ChatOpenAI
 from typing import List
+import html
+from langchain_core.output_parsers import StrOutputParser
+
+from prompts import ALTERNATE_QUESTION_PROMPT, DOCUMENT_CHAT_PROMPT
 
 
 class OpenAIClient:
@@ -19,6 +23,8 @@ class OpenAIClient:
             Initiates a chat using the provided prompt template and payload.
         fetch_alternate_questions(que: str, no_of_questions: int) -> str: 
             Fetches alternate questions based on the input query.
+        fetch_chat_response(que: str, context: str) -> str: 
+            Fetches chat response as per document context
     """
 
     def __init__(self, api_key: str):
@@ -30,7 +36,7 @@ class OpenAIClient:
         """
         self.embeddings = OpenAIEmbeddings(
             model="text-embedding-3-large",
-            dimensions=1024,
+            dimensions=1536,
             openai_api_key=api_key
         )
         self.llm = ChatOpenAI(
@@ -38,6 +44,7 @@ class OpenAIClient:
             temperature=0,
             api_key=api_key
         )
+        self.output_parser = StrOutputParser()
 
     async def create_embedding(self, text: str) -> List[List[float]]:
         """
@@ -52,7 +59,7 @@ class OpenAIClient:
         vector_text = self.embeddings.embed_documents([text])
         return vector_text
 
-    def chat(self, prompt_template: ChatPromptTemplate, payload) -> str:
+    async def _chat(self, prompt_template: ChatPromptTemplate, payload):
         """
         Initiates a chat using the provided prompt template and payload.
 
@@ -63,9 +70,42 @@ class OpenAIClient:
         Returns:
             str: The response from the chat.
         """
-        chain = prompt_template | self.llm
+        chain = prompt_template | self.llm | self.output_parser
         response = chain.invoke(payload)
         return response
+
+    async def fetch_chat_response(self, que: str, context: str):
+        """
+        Fetches alternate questions based on the input query and context.
+
+        Args:
+            que (str): The input query for which alternate questions are to be fetched.
+            context (str): The context string to provide additional information.
+
+        Returns:
+            str: The response containing alternate questions.
+        """
+        try:
+            prompt = ChatPromptTemplate.from_messages(
+                [
+                    (
+                        "system",
+                        DOCUMENT_CHAT_PROMPT,
+                    ),
+                    ("human", "{que}"),
+                ]
+            )
+            response = await self._chat(prompt, {
+                "context": context,
+                "que": que
+            })
+
+            if response:
+                return [html.escape(response) for response in response.split('\n')]
+            else:
+                return [html.escape(response)]
+        except Exception as e:
+            print(e)
 
     async def fetch_alternate_questions(self, que: str, no_of_questions: int) -> str:
         """
@@ -83,15 +123,19 @@ class OpenAIClient:
                 [
                     (
                         "system",
-                        "Your role is to assist by creating {no_of_questions} diverse renditions of the user query, aimed at retrieving pertinent documents from a vector database. By offering varied perspectives on the query, the aim is to mitigate the constraints of distance-based similarity search. Deliver these alternative inquiries in a list format, each separated by a newline.",
+                        ALTERNATE_QUESTION_PROMPT,
                     ),
                     ("human", "{que}"),
                 ]
             )
-            response = self.chat(prompt, {
+            response = await self._chat(prompt, {
                 "no_of_questions": no_of_questions,
                 "que": que
             })
-            return response
+
+            if (response):
+                return [html.escape(response) for response in response.split('\n')]
+            else:
+                return [html.escape(response)]
         except Exception as e:
             print(e)

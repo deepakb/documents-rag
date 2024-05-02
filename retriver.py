@@ -12,7 +12,6 @@ class VectorRetriever:
     Attributes:
         openai (OpenAIClient): An instance of OpenAIClient for fetching alternate questions and creating embeddings.
         mongo_client (MongoDBAtlasClient): An instance of MongoDBAtlasClient for database operations.
-        messages (list): A list of system messages.
 
     Methods:
         invoke(chatRequest: ChatRequest, collections: List[str], filters: dict) -> dict: 
@@ -29,30 +28,26 @@ class VectorRetriever:
             openai (OpenAIClient): An instance of OpenAIClient.
             mongo_client (MongoDBAtlasClient): An instance of MongoDBAtlasClient.
         """
-        self.messages = [
-            {
-                "role": "system",
-                "content": "You are an intelligent assistant tasked with aiding users in obtaining contextually relevant answers."
-            }]
         self.openai = openai
         self.mongo_client = mongo_client
 
-    async def invoke(self, chatRequest: ChatRequest, collections=List[str], filters=dict) -> dict:
+    async def invoke(self, chatRequest: ChatRequest, collections=List[str]):
         """
         Invokes OpenAI to fetch alternate questions based on the input chat request.
 
         Args:
-            chatRequest (ChatRequest): An instance of ChatRequest containing the user's question.
+            chatRequest (ChatRequest): An instance of ChatRequest containing the user's question, file_id and filters.
             collections (List[str]): A list of MongoDB collections to search.
-            filters (dict): Optional filters for refining the search.
 
         Returns:
-            dict: A dictionary containing alternate questions fetched from OpenAI.
+            str: A dictionary containing alternate questions fetched from OpenAI.
         """
-        response = await self.openai.fetch_alternate_questions(chatRequest.question, 5)
+        (file_id, question, filters) = chatRequest
+        varients = await self.openai.fetch_alternate_questions(question, 5)
+        response = await self._do_vector_search(collections, varients, filters)
         return response
 
-    def do_vector_search(self, collections: List[str], source: List[str], pre_filters: dict) -> str:
+    async def _do_vector_search(self, collections: List[str], source: List[str], pre_filters: dict):
         """
         Performs vector search on the specified collections and returns results.
 
@@ -64,41 +59,50 @@ class VectorRetriever:
         Returns:
             str: A JSON string containing the search results.
         """
-        allResults = []
-        queryVectors = [self.openai.create_embedding(
-            query) for query in source]
+        query_vectors = []
+        for query in source:
+            try:
+                embedding = await self.openai.create_embedding(query)
+                query_vectors.append(embedding)
+            except Exception as e:
+                print(f"Error creating embedding for query '{query}': {e}")
 
         for col in collections:
             results = []
-            collection = self.db[col]
-            for queryVector in queryVectors:
-                params = {
-                    "queryVector": queryVector,
-                    "path": "documents",
-                    "numCandidates": 100,
-                    "limit": 1,
-                    "index": "raw",
-                }
+            try:
+                collection = self.mongo_client.db[col]
+                for query_vector in query_vectors:
+                    try:
+                        params = {
+                            "queryVector": query_vector[0],
+                            "path": "vector_chunk",
+                            "numCandidates": 100,
+                            "limit": 1,
+                            "index": "rag_doc_index",
+                        }
 
-                if pre_filters:
-                    params["filter"] = pre_filters
+                        # if pre_filters:
+                        #     params["filter"] = pre_filters
 
-                query = {"$vectorSearch": params}
+                        query = {"$vectorSearch": params}
 
-                pipeline = [
-                    query,
-                    {"$set": {"score": {"$meta": "vectorSearchScore"}}}
-                ]
+                        pipeline = [
+                            query,
+                            {"$set": {"score": {"$meta": "vectorSearchScore"}}}
+                        ]
 
-                response = collection.aggregate(pipeline=pipeline)
-                for res in response:
-                    chunkTextData = json.loads(self.mongo_client.get(col, {"chunkId": res['chunkId']}, {
-                                               "chunkValueRaw": 1, "fileName": 1, "_id": 0}, 'single'))
-                    results.append({'score': res['score'], 'text': chunkTextData['chunkValueRaw'],
-                                   'source':  chunkTextData['fileName'], "kbStore": res['kbStore']})
+                        response = collection.aggregate(pipeline=pipeline)
+                        for res in response:
+                            try:
+                                chunk_res = self.mongo_client.get(col, {"chunk_id": res['chunk_id']}, {
+                                    "raw_chunk": 1, "file_name": 1, "_id": 0}, 'single')
+                                results.append({'score': res['score'], 'text': chunk_res['raw_chunk'],
+                                                'source':  chunk_res['file_name']})
+                            except Exception as e:
+                                print(f"Error processing result: {e}")
+                    except Exception as e:
+                        print(f"Error querying collection '{col}': {e}")
+            except Exception as e:
+                print(f"Error accessing collection '{col}': {e}")
 
-            if len(results) > 0:
-                sorted_results = sorted(results, key=lambda x: x['score'])
-                allResults.append(sorted_results[0])
-
-        return json.dumps(allResults)
+        return json.dumps(results)
