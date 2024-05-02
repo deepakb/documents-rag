@@ -1,5 +1,5 @@
 import json
-from typing import List
+from typing import List, Union
 from pymongo import MongoClient
 from langchain_community.vectorstores import MongoDBAtlasVectorSearch
 from langchain_openai import OpenAIEmbeddings
@@ -26,52 +26,6 @@ class MongoDBAtlasClient:
         self.client = MongoClient(uri)
         self.db = self.client[db_name]
 
-    def insert_document(self, collection_name: str, document: dict) -> str:
-        """
-        Insert a single document into a MongoDB collection.
-
-        Args:
-            collection_name (str): The name of the collection to insert the document into.
-            document (dict): The document to insert into the collection.
-
-        Returns:
-            str: The ObjectId of the inserted document.
-        """
-        collection = self.db[collection_name]
-        result = collection.insert_one(document)
-        return result.inserted_id
-
-    def insert_documents(self, collection_name: str, documents: List[dict]) -> List[str]:
-        """
-        Insert multiple documents into a MongoDB collection.
-
-        Args:
-            collection_name (str): The name of the collection to insert the documents into.
-            documents (List[dict]): The list of documents to insert into the collection.
-
-        Returns:
-            List[str]: The list of ObjectIds of the inserted documents.
-        """
-        collection = self.db[collection_name]
-        result = collection.insert_many(documents)
-        return result.inserted_ids
-
-    def delete_documents(self, collection_name: str, document_ids: List[str], field: str) -> int:
-        """
-        Delete documents from a MongoDB collection based on provided document IDs.
-
-        Args:
-            collection_name (str): The name of the collection from which to delete documents.
-            document_ids (List[str]): The list of document IDs to delete.
-            field (str): The field to match document IDs against.
-
-        Returns:
-            int: The number of documents deleted.
-        """
-        collection = self.db[collection_name]
-        result = collection.delete_many({field: {"$in": document_ids}})
-        return result.deleted_count
-
     def get(self, collection: str, query: dict, projection: dict, return_type: str = 'single'):
         """
         Retrieve data from a MongoDB collection based on provided parameters.
@@ -96,3 +50,41 @@ class MongoDBAtlasClient:
             result = collection.find(query, projection)
 
         return result
+
+    def save(self, collection_name: str, document: Union[dict, List[dict]]) -> Union[str, List[str]]:
+        """
+        Insert document(s) into a MongoDB collection.
+
+        Args:
+            collection_name (str): The name of the collection to insert the document(s) into.
+            document (Union[dict, List[dict]]): The document or list of documents to insert into the collection.
+
+        Returns:
+            Union[str, List[str]]: The ObjectId of the inserted document(s).
+        """
+        collection = self.db[collection_name]
+        if isinstance(document, dict):
+            result = collection.insert_one(document)
+            return str(result.inserted_id)
+        elif isinstance(document, list):
+            result = collection.insert_many(document)
+            return [str(doc_id) for doc_id in result.inserted_ids]
+        else:
+            raise ValueError(
+                "Document must be either a dictionary or a list of dictionaries.")
+
+    def delete(self, collection_name: str, document_ids: List[str], field: str) -> int:
+        """
+        Delete documents from a MongoDB collection based on provided document IDs.
+
+        Args:
+            collection_name (str): The name of the collection from which to delete documents.
+            document_ids (List[str]): The list of document IDs to delete.
+            field (str): The field to match document IDs against.
+
+        Returns:
+            int: The number of documents deleted.
+        """
+        collection = self.db[collection_name]
+        result = collection.delete_many({field: {"$in": document_ids}})
+        return result.deleted_count

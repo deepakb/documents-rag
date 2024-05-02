@@ -74,7 +74,7 @@ async def add_documents(files: List[UploadFile] = File(...)):
                 doc_id += 1
 
             # Store the embedded vectors in MongoDB Atlas
-            client.insert_documents(COLLECTION_NAME, vectors)
+            client.save(COLLECTION_NAME, vectors)
 
             # Delete temp folder after it's usage
             try:
@@ -97,7 +97,7 @@ async def delete_documents(document_ids: List[str]):
         object_ids = [str(doc_id) for doc_id in document_ids]
 
         # Delete documents from MongoDB Atlas
-        deleted_count = client.delete_documents(
+        deleted_count = client.delete(
             COLLECTION_NAME, object_ids, 'file_id')
 
         return {"message": f"{deleted_count} documents deleted successfully"}
