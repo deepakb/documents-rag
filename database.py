@@ -1,9 +1,5 @@
-import json
 from typing import List, Union
 from pymongo import MongoClient
-from langchain_community.vectorstores import MongoDBAtlasVectorSearch
-from langchain_openai import OpenAIEmbeddings
-from langchain_core.documents import Document
 
 
 class MongoDBAtlasClient:

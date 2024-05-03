@@ -102,7 +102,7 @@ class ProcessDocuments:
         file_extension = filename.split(".")[-1]
         return file_extension in valid_extensions
 
-    async def _load_document(file: str, file_extension: str) -> List[Document]:
+    async def _load_document(self, file: str, file_extension: str) -> List[Document]:
         """
         Loads a document from the specified file based on its extension.
 
@@ -131,7 +131,7 @@ class ProcessDocuments:
         documents = loader.load()
         return documents
 
-    async def _split_text_into_chunks(text: str, chunk_size: int) -> List[str]:
+    async def _split_text_into_chunks(self, text: str, chunk_size: int) -> List[str]:
         """
             Splits the input text into chunks of specified size.
 
