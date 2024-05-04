@@ -68,19 +68,3 @@ class MongoDBAtlasClient:
         else:
             raise ValueError(
                 "Document must be either a dictionary or a list of dictionaries.")
-
-    def delete(self, collection_name: str, document_ids: List[str], field: str) -> int:
-        """
-        Delete documents from a MongoDB collection based on provided document IDs.
-
-        Args:
-            collection_name (str): The name of the collection from which to delete documents.
-            document_ids (List[str]): The list of document IDs to delete.
-            field (str): The field to match document IDs against.
-
-        Returns:
-            int: The number of documents deleted.
-        """
-        collection = self.db[collection_name]
-        result = collection.delete_many({field: {"$in": document_ids}})
-        return result.deleted_count

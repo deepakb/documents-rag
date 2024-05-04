@@ -1,6 +1,6 @@
 import json
 from typing import List
-from models import ChatRequest
+from model import ChatRequest
 from openai_client import OpenAIClient
 from database import MongoDBAtlasClient
 
