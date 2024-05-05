@@ -15,7 +15,8 @@ class Documents(BaseModel):
         status (Literal["pending", "completed"]): The status of the document, which can be either "pending" or "completed".
         created_at (datetime): The timestamp indicating when the document was created. Defaults to the current datetime when not provided.
     """
-    id: ObjectIdField = Field(default_factory=ObjectIdField, alias="_id")
+    id: ObjectIdField = Field(
+        default_factory=ObjectIdField, primary_key=True, alias="_id")
     name: str
     type: str
     status: Literal["pending", "completed"]

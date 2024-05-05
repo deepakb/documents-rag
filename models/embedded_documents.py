@@ -51,6 +51,7 @@ class EmbeddedDocumentsRepository(AbstractRepository[EmbeddedDocuments]):
         Returns:
             int: The number of documents deleted.
         """
-        result = self.get_collection().delete_many(
+        collection = self.get_collection()
+        result = collection.delete_many(
             {field: {"$in": document_ids}})
         return result.deleted_count

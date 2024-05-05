@@ -14,24 +14,30 @@ from models.embedded_documents import EmbeddedDocumentsRepository
 # Initialize FastAPI app
 app = FastAPI()
 
-# Intialize OpenAIClient
+# Initialize OpenAIClient
 openai = OpenAIClient(api.openai_key)
 
 # Initialize MongoDB Atlas client
 client = MongoDBAtlasClient(mongo.uri, mongo.database)
 
-# Intialize document processor
+# Initialize document processor
 doc_processor = ProcessDocuments(openai, client)
 
+# Define tags
+tags_metadata = [
+    {"name": "documents", "description": "Operations related to documents"},
+    {"name": "chat", "description": "Operations related to chat"},
+]
 
-@app.post("/add-documents/")
+
+@app.post("/add-documents/", tags=["documents"], summary="Upload and process documents")
 async def add_documents(files: List[UploadFile] = File(...)):
     response = await doc_processor.process(files, mongo.embedded_collection)
     return response
 
 
-@app.delete("/delete-documents/")
-async def delete_documents(document_ids: List[str]):
+@app.delete("/delete-documents/", tags=["documents"], summary="Delete documents by IDs")
+async def delete_documents(document_ids: List[str], summary="Delete documents by IDs"):
     try:
         object_ids = [str(doc_id) for doc_id in document_ids]
         repo = EmbeddedDocumentsRepository(database=client.db)
@@ -39,7 +45,6 @@ async def delete_documents(document_ids: List[str]):
         response = Response.success(
             message=f"{deleted_count} documents deleted successfully"
         )
-
         return response.to_dict()
     except Exception as e:
         response, status_code = Response.failure(str(e), status_code=500)
@@ -49,7 +54,7 @@ async def delete_documents(document_ids: List[str]):
         )
 
 
-@app.post("/chat/")
+@app.post("/chat/", tags=["chat"], summary="Chat with AI assistant")
 async def chat(chatRequest: ChatRequest):
     try:
         retriver = VectorRetriever(openai, client)
@@ -57,7 +62,6 @@ async def chat(chatRequest: ChatRequest):
         context_data = json.loads(context)[0]
         api_response = await openai.fetch_chat_response(chatRequest.question, context_data['text'])
         response = Response.success(message=api_response)
-
         return response.to_dict()
     except Exception as e:
         response, status_code = Response.failure(str(e), status_code=500)
