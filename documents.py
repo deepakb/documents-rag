@@ -54,9 +54,8 @@ class ProcessDocuments:
 
                 document_repo = DocumentRepository(
                     database=self.mongo_client.db)
-                res = document_repo.update_by_field(
+                document_repo.update_by_field(
                     field='_id', value=ObjectId(document_id), update_data={"status": "completed"})
-                print(res, document_id)
 
                 # Delete temp folder after it's usage
                 try:

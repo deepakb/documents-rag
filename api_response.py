@@ -36,8 +36,8 @@ class Response:
         Creates a successful API response.
 
         Args:
-            data (Union[List[Any], Dict[str, Any], None]): The data to be included in the response.
-            message (Union[str, None]): A message to be included in the response.
+            data (Union[List[Any], Dict[str, Any], None], optional): The data to be included in the response.
+            message (Union[str, None], optional): A message to be included in the response.
 
         Returns:
             Response: An instance of ApiResponse representing a successful response.
@@ -48,7 +48,12 @@ class Response:
         if data is None and message is None:
             raise ValueError(
                 "Either data or message must be provided for a successful response")
-        return cls(success=True, data=data, message=message)
+        elif data is not None and message is not None:
+            return cls(success=True, data=data, message=message)
+        elif data is not None:
+            return cls(success=True, data=data)
+        elif message is not None:
+            return cls(success=True, message=message)
 
     @classmethod
     def failure(cls, error: str, status_code: int = 400) -> 'Response':

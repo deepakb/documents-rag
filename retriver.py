@@ -42,7 +42,7 @@ class VectorRetriever:
         Returns:
             str: A dictionary containing alternate questions fetched from OpenAI.
         """
-        (file_id, question, filters) = chatRequest
+        question, filters = chatRequest
         varients = await self.openai.fetch_alternate_questions(question, 5)
         response = await self._do_vector_search(collections, varients, filters)
         return response
