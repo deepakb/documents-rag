@@ -9,7 +9,7 @@ from model import ChatRequest
 from api_response import Response
 from documents import ProcessDocuments
 from settings import api, mongo
-from models.embedded_documents import EmbeddedDocumentsRepository
+from models.embedded_documents import EmbeddedDocumentRepository
 
 # Initialize FastAPI app
 app = FastAPI()
@@ -32,7 +32,7 @@ tags_metadata = [
 
 @app.post("/add-documents/", tags=["documents"], summary="Upload and process documents")
 async def add_documents(files: List[UploadFile] = File(...)):
-    response = await doc_processor.process(files, mongo.embedded_collection)
+    response = await doc_processor.process(files)
     return response
 
 
@@ -40,7 +40,7 @@ async def add_documents(files: List[UploadFile] = File(...)):
 async def delete_documents(document_ids: List[str], summary="Delete documents by IDs"):
     try:
         object_ids = [str(doc_id) for doc_id in document_ids]
-        repo = EmbeddedDocumentsRepository(database=client.db)
+        repo = EmbeddedDocumentRepository(database=client.db)
         deleted_count = repo.delete_by_field(object_ids, 'documents_id')
         response = Response.success(
             message=f"{deleted_count} documents deleted successfully"

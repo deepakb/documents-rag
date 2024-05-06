@@ -46,25 +46,3 @@ class MongoDBAtlasClient:
             result = collection.find(query, projection)
 
         return result
-
-    def save(self, collection_name: str, document: Union[dict, List[dict]]) -> Union[str, List[str]]:
-        """
-        Insert document(s) into a MongoDB collection.
-
-        Args:
-            collection_name (str): The name of the collection to insert the document(s) into.
-            document (Union[dict, List[dict]]): The document or list of documents to insert into the collection.
-
-        Returns:
-            Union[str, List[str]]: The ObjectId of the inserted document(s).
-        """
-        collection = self.db[collection_name]
-        if isinstance(document, dict):
-            result = collection.insert_one(document)
-            return str(result.inserted_id)
-        elif isinstance(document, list):
-            result = collection.insert_many(document)
-            return [str(doc_id) for doc_id in result.inserted_ids]
-        else:
-            raise ValueError(
-                "Document must be either a dictionary or a list of dictionaries.")

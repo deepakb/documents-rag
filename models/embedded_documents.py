@@ -7,7 +7,7 @@ from pymongo.database import Database
 from settings import mongo
 
 
-class EmbeddedDocuments(BaseModel):
+class EmbeddedDocument(BaseModel):
     """
     Represents an embedded document.
 
@@ -32,13 +32,13 @@ class EmbeddedDocuments(BaseModel):
     expires_at: Optional[datetime]
 
 
-class EmbeddedDocumentsRepository(AbstractRepository[EmbeddedDocuments]):
+class EmbeddedDocumentRepository(AbstractRepository[EmbeddedDocument]):
     """
     Repository class for interacting with the 'embedded_documents' collection.
     """
 
     class Meta:
-        collection_name = mongo.documents_collection
+        collection_name = mongo.embedded_collection
 
     def delete_by_field(self, document_ids: List[str], field: str) -> int:
         """

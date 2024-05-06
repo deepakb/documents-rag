@@ -5,6 +5,7 @@ import shutil
 from bson import ObjectId
 from typing import List, Tuple
 from fastapi import UploadFile
+from pymongo.results import InsertOneResult, UpdateResult
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import TextLoader, PyPDFLoader, UnstructuredPowerPointLoader, UnstructuredWordDocumentLoader
@@ -13,15 +14,18 @@ from utils import get_token_counts
 from openai_client import OpenAIClient
 from database import MongoDBAtlasClient
 from api_response import Response
-from models.embedded_documents import EmbeddedDocumentsRepository, EmbeddedDocuments
+from models.embedded_documents import EmbeddedDocumentRepository, EmbeddedDocument as EmbeddedDocumentModel
+from models.documents import DocumentRepository, Document as DocumentModel
 
 
 class ProcessDocuments:
     def __init__(self, openai: OpenAIClient, mongo_client: MongoDBAtlasClient):
         self.openai = openai
         self.mongo_client = mongo_client
+        self.valid_documents = [
+            'txt', 'docx', 'doc', 'pdf', 'ppt']
 
-    async def process(self, files: List[UploadFile], collection: str):
+    async def process(self, files: List[UploadFile]):
         results = []
         for file in files:
             try:
@@ -30,21 +34,29 @@ class ProcessDocuments:
                     raise ValueError(f"Invalid file type for {file.filename}")
 
                 # Save the file to a temp location
-                file_id = str(uuid.uuid4())
                 folder_path, full_file_path, file_extension, file_name = await self._save_file_temp_loc(file)
+
+                # Save document for processing
+                document_id = self._create_document(file_extension, file_name)
+                if document_id is None:
+                    raise ValueError("Document not saved successfully")
 
                 # Parse text from the uploaded document and loads as documents
                 documents = await self._load_document(full_file_path, file_extension)
 
                 # Create embedding records for all documents given
-                vectors = await self._create_vectors(documents, file_id, file_name)
+                vectors = await self._create_vectors(documents, document_id, file_name)
 
                 # Store the embedded vectors in MongoDB Atlas
-                repo = EmbeddedDocumentsRepository(
+                embedded_doc_repo = EmbeddedDocumentRepository(
                     database=self.mongo_client.db)
-                repo.save_many(vectors)
+                embedded_doc_repo.save_many(vectors)
 
-                # self.mongo_client.save(collection, vectors)
+                document_repo = DocumentRepository(
+                    database=self.mongo_client.db)
+                res = document_repo.update_by_field(
+                    field='_id', value=ObjectId(document_id), update_data={"status": "completed"})
+                print(res, document_id)
 
                 # Delete temp folder after it's usage
                 try:
@@ -69,9 +81,8 @@ class ProcessDocuments:
         Returns:
             bool: True if the file extension is valid, False otherwise.
         """
-        valid_extensions = ['txt', 'docx', 'doc', 'pdf', 'ppt']
         file_extension = filename.split(".")[-1]
-        return file_extension in valid_extensions
+        return file_extension in self.valid_documents
 
     async def _load_document(self, file: str, file_extension: str) -> List[Document]:
         """
@@ -145,7 +156,7 @@ class ProcessDocuments:
 
         return folder_path, full_file_path, file_extension, file_name
 
-    async def _create_vectors(self, documents: List[Document], file_id: str, file_name: str) -> List[EmbeddedDocuments]:
+    async def _create_vectors(self, documents: List[Document], document_id: str, file_name: str) -> List[EmbeddedDocumentModel]:
         texts = [d.page_content for d in documents]
         tokens = sum([get_token_counts(d) for d in texts])
         # model limit is 8192
@@ -158,15 +169,14 @@ class ProcessDocuments:
         doc_id = 1
 
         for chunk in chunks:
-            unique_id = file_id + '-' + str(doc_id)
+            unique_id = document_id + '-' + str(doc_id)
             token_count = get_token_counts(chunk)
             vector_text = await self.openai.create_embedding(chunk)
             vectors.append(
-                EmbeddedDocuments(
+                EmbeddedDocumentModel(
                     id=ObjectId(),
                     chunk_id=unique_id,
-                    documents_id=file_id,
-                    file_id=file_id,
+                    documents_id=document_id,
                     file_name=file_name.replace(' ', '_'),
                     raw_chunk=chunk,
                     vector_chunk=vector_text[0],
@@ -178,3 +188,41 @@ class ProcessDocuments:
             doc_id += 1
 
         return vectors
+
+    def _create_document(self, ext: str, file_name: str):
+        """
+        Saves the document in the DocumentRepository and returns its ID.
+
+        Args:
+            document (Document): The document to be saved.
+
+        Returns:
+            str: The ID of the saved document.
+        """
+        if ext not in self.valid_documents:
+            raise ValueError(f"Invalid extension: {ext}")
+
+        document = DocumentModel(
+            id=ObjectId(),
+            name=file_name,
+            type=ext,
+            status="pending"
+        )
+        document_repo = DocumentRepository(
+            database=self.mongo_client.db)
+        response = document_repo.save(document)
+
+        return self._get_document_id(response)
+
+    def _get_document_id(self, response):
+        if isinstance(response, InsertOneResult):
+            return str(response.inserted_id)
+        elif isinstance(response, UpdateResult):
+            if response.upserted_id:
+                return str(response.upserted_id)
+            elif response.inserted_id:
+                return str(response.inserted_id)
+            else:
+                return None
+        else:
+            return None
