@@ -1,7 +1,7 @@
 # Dependency Resolver for Document Processing
 from fastapi import Depends
 from vendor.openai import get_openai_client
-from vendor.mongo_atlas import get_mongodb_client
+from vendor.mongodb import get_mongodb_client
 from services.openai_client import OpenAIClient
 from services.database import MongoDBAtlasClient
 from services.document_handler import DocumentHandler

@@ -3,7 +3,7 @@ from typing import List
 from fastapi import File, UploadFile
 
 from services.document_handler import DocumentHandler
-from vendor.process_documents import get_document_handler
+from vendor.document import get_document_handler
 
 router = APIRouter()
 

@@ -20,13 +20,33 @@ from models.document import DocumentRepository, Document as DocumentModel
 
 
 class DocumentHandler:
+    """
+    Handles document processing, including upload, processing, and deletion.
+    """
+
     def __init__(self, openai: OpenAIClient, mongo_client: MongoDBAtlasClient):
+        """
+        Initializes the DocumentHandler with OpenAI client and MongoDB client.
+
+        Args:
+            openai (OpenAIClient): OpenAI client for text embedding.
+            mongo_client (MongoDBAtlasClient): MongoDB client for database operations.
+        """
         self.openai = openai
         self.mongo_client = mongo_client
         self.valid_documents = [
             'txt', 'docx', 'doc', 'pdf', 'ppt']
 
     async def process(self, files: List[UploadFile]):
+        """
+        Processes uploaded files, saves them, extracts text, creates embeddings, and stores them.
+
+        Args:
+            files (List[UploadFile]): List of files to process.
+
+        Returns:
+            Response: Response object indicating success or failure of the operation.
+        """
         results = []
         for file in files:
             try:
@@ -72,6 +92,15 @@ class DocumentHandler:
         return Response.success(data=results)
 
     async def delete(self, document_id: str):
+        """
+        Deletes a document and its associated embedded documents.
+
+        Args:
+            document_id (str): ID of the document to delete.
+
+        Returns:
+            Response: Response object indicating success or failure of the operation.
+        """
         try:
             # Delete document based on document_id
             logger.info(
@@ -132,15 +161,15 @@ class DocumentHandler:
 
     async def _split_text_into_chunks(self, text: str, chunk_size: int) -> List[str]:
         """
-            Splits the input text into chunks of specified size.
+        Splits the input text into chunks of specified size.
 
-            Args:
-                text (str): The input text to be split into chunks.
-                chunk_size (int): The size of each chunk.
+        Args:
+            text (str): The input text to be split into chunks.
+            chunk_size (int): The size of each chunk.
 
-            Returns:
-                List[str]: A list of text chunks.
-            """
+        Returns:
+            List[str]: A list of text chunks.
+        """
         splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
             encoding_name="cl100k_base", chunk_size=chunk_size, chunk_overlap=0
         )
@@ -174,6 +203,17 @@ class DocumentHandler:
         return folder_path, full_file_path, file_extension, file_name
 
     async def _create_vectors(self, documents: List[Document], document_id: str, file_name: str) -> List[EmbeddedDocumentModel]:
+        """
+        Create embedding vectors for the given documents.
+
+        Args:
+            documents (List[Document]): List of documents.
+            document_id (str): ID of the document.
+            file_name (str): Name of the file.
+
+        Returns:
+            List[EmbeddedDocumentModel]: List of embedded document models.
+        """
         texts = [d.page_content for d in documents]
         tokens = sum([get_token_counts(d) for d in texts])
         # model limit is 8192
@@ -211,10 +251,11 @@ class DocumentHandler:
         Saves the document in the DocumentRepository and returns its ID.
 
         Args:
-            document (Document): The document to be saved.
+            ext (str): Extension of the document.
+            file_name (str): Name of the file.
 
         Returns:
-            str: The ID of the saved document.
+            str: ID of the saved document.
         """
         if ext not in self.valid_documents:
             raise ValueError(f"Invalid extension: {ext}")
@@ -232,6 +273,15 @@ class DocumentHandler:
         return self._get_document_id(response)
 
     def _get_document_id(self, response):
+        """
+        Extracts the document ID from the database response.
+
+        Args:
+            response: Response from the database.
+
+        Returns:
+            str: ID of the document.
+        """
         if isinstance(response, InsertOneResult):
             return str(response.inserted_id)
         elif isinstance(response, UpdateResult):
