@@ -17,12 +17,19 @@ class BaseSettings(PydanticBaseSettings):
 
 class APISettings(BaseSettings):
     """
-    Settings class for API configuration.
+   Settings class for API configuration.
 
     Attributes:
+        prefix (str): Prefix for API endpoints (defaults to "/api").
+        version (str): API version (defaults to "0.1.0").
         openai_key (str): API key for OpenAI.
+        debug (bool): Flag indicating whether debugging mode is enabled.
     """
+    project_name: str = "documentsrag"
+    prefix: str = "/api"
+    version: str = "0.1.0"
     openai_key: str
+    debug: bool
 
     class Config:
         env_prefix = "API_"

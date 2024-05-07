@@ -1,7 +1,8 @@
 import os
-import uuid
 import datetime
 import shutil
+from fastapi import HTTPException
+from loguru import logger
 from bson import ObjectId
 from typing import List, Tuple
 from fastapi import UploadFile
@@ -10,15 +11,15 @@ from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import TextLoader, PyPDFLoader, UnstructuredPowerPointLoader, UnstructuredWordDocumentLoader
 
-from utils import get_token_counts
-from openai_client import OpenAIClient
-from database import MongoDBAtlasClient
-from api_response import Response
-from models.embedded_documents import EmbeddedDocumentRepository, EmbeddedDocument as EmbeddedDocumentModel
-from models.documents import DocumentRepository, Document as DocumentModel
+from utils.utils import get_token_counts
+from services.openai_client import OpenAIClient
+from services.database import MongoDBAtlasClient
+from services.api_response import Response
+from models.embedded_document import EmbeddedDocumentRepository, EmbeddedDocument as EmbeddedDocumentModel
+from models.document import DocumentRepository, Document as DocumentModel
 
 
-class ProcessDocuments:
+class DocumentHandler:
     def __init__(self, openai: OpenAIClient, mongo_client: MongoDBAtlasClient):
         self.openai = openai
         self.mongo_client = mongo_client
@@ -54,8 +55,8 @@ class ProcessDocuments:
 
                 document_repo = DocumentRepository(
                     database=self.mongo_client.db)
-                document_repo.update_by_field(
-                    field='_id', value=ObjectId(document_id), update_data={"status": "completed"})
+                document_repo.update_document(
+                    {"_id": ObjectId(document_id)}, {"status": "completed"})
 
                 # Delete temp folder after it's usage
                 try:
@@ -70,18 +71,35 @@ class ProcessDocuments:
 
         return Response.success(data=results)
 
-    def _check_file_type(self, filename: str) -> bool:
-        """
-        Checks if the given filename has a valid extension.
+    async def delete(self, document_id: str):
+        try:
+            # Delete document based on document_id
+            logger.info(
+                f"Deleting document for documents id: {document_id}")
+            document_repo = DocumentRepository(database=self.mongo_client.db)
+            doc_deleted_count = await document_repo.delete_document(document_id)
+            logger.info(
+                f"{doc_deleted_count} documents deleted successfully")
 
-        Args:
-            filename (str): The name of the file to check.
+            # Delete embedded documents associated with document
+            logger.info(
+                f"Deleting embedded_documents for documents id: {document_id}")
+            e_documents_repo = EmbeddedDocumentRepository(
+                database=self.mongo_client.db)
+            e_doc_deleted_count = await e_documents_repo.delete_embedded_documents(
+                {'documents_id': document_id})
+            logger.info(
+                f"{e_doc_deleted_count} embedded documents deleted successfully")
 
-        Returns:
-            bool: True if the file extension is valid, False otherwise.
-        """
-        file_extension = filename.split(".")[-1]
-        return file_extension in self.valid_documents
+            return Response.success(
+                message=f"{doc_deleted_count} documents and {e_doc_deleted_count} embedded documents deleted successfully"
+            )
+        except Exception as e:
+            response, status_code = Response.failure(str(e), status_code=500)
+            raise HTTPException(
+                status_code=status_code,
+                detail=response.to_dict()
+            )
 
     async def _load_document(self, file: str, file_extension: str) -> List[Document]:
         """
@@ -225,3 +243,16 @@ class ProcessDocuments:
                 return None
         else:
             return None
+
+    def _check_file_type(self, filename: str) -> bool:
+        """
+        Checks if the given filename has a valid extension.
+
+        Args:
+            filename (str): The name of the file to check.
+
+        Returns:
+            bool: True if the file extension is valid, False otherwise.
+        """
+        file_extension = filename.split(".")[-1]
+        return file_extension in self.valid_documents

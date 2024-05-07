@@ -1,8 +1,8 @@
 import json
 from typing import List
-from model import ChatRequest
-from openai_client import OpenAIClient
-from database import MongoDBAtlasClient
+from core.model import ChatRequest
+from services.openai_client import OpenAIClient
+from services.database import MongoDBAtlasClient
 
 
 class VectorRetriever:
