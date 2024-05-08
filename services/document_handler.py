@@ -1,7 +1,8 @@
 import os
-import uuid
 import datetime
 import shutil
+from fastapi import HTTPException
+from loguru import logger
 from bson import ObjectId
 from typing import List, Tuple
 from fastapi import UploadFile
@@ -10,22 +11,42 @@ from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import TextLoader, PyPDFLoader, UnstructuredPowerPointLoader, UnstructuredWordDocumentLoader
 
-from utils import get_token_counts
-from openai_client import OpenAIClient
-from database import MongoDBAtlasClient
-from api_response import Response
-from models.embedded_documents import EmbeddedDocumentRepository, EmbeddedDocument as EmbeddedDocumentModel
-from models.documents import DocumentRepository, Document as DocumentModel
+from utils.utils import get_token_counts
+from services.openai_client import OpenAIClient
+from services.database import MongoDBAtlasClient
+from services.api_response import Response
+from models.embedded_document import EmbeddedDocumentRepository, EmbeddedDocument as EmbeddedDocumentModel
+from models.document import DocumentRepository, Document as DocumentModel
 
 
-class ProcessDocuments:
+class DocumentHandler:
+    """
+    Handles document processing, including upload, processing, and deletion.
+    """
+
     def __init__(self, openai: OpenAIClient, mongo_client: MongoDBAtlasClient):
+        """
+        Initializes the DocumentHandler with OpenAI client and MongoDB client.
+
+        Args:
+            openai (OpenAIClient): OpenAI client for text embedding.
+            mongo_client (MongoDBAtlasClient): MongoDB client for database operations.
+        """
         self.openai = openai
         self.mongo_client = mongo_client
         self.valid_documents = [
             'txt', 'docx', 'doc', 'pdf', 'ppt']
 
     async def process(self, files: List[UploadFile]):
+        """
+        Processes uploaded files, saves them, extracts text, creates embeddings, and stores them.
+
+        Args:
+            files (List[UploadFile]): List of files to process.
+
+        Returns:
+            Response: Response object indicating success or failure of the operation.
+        """
         results = []
         for file in files:
             try:
@@ -54,8 +75,8 @@ class ProcessDocuments:
 
                 document_repo = DocumentRepository(
                     database=self.mongo_client.db)
-                document_repo.update_by_field(
-                    field='_id', value=ObjectId(document_id), update_data={"status": "completed"})
+                document_repo.update_document(
+                    {"_id": ObjectId(document_id)}, {"status": "completed"})
 
                 # Delete temp folder after it's usage
                 try:
@@ -70,18 +91,44 @@ class ProcessDocuments:
 
         return Response.success(data=results)
 
-    def _check_file_type(self, filename: str) -> bool:
+    async def delete(self, document_id: str):
         """
-        Checks if the given filename has a valid extension.
+        Deletes a document and its associated embedded documents.
 
         Args:
-            filename (str): The name of the file to check.
+            document_id (str): ID of the document to delete.
 
         Returns:
-            bool: True if the file extension is valid, False otherwise.
+            Response: Response object indicating success or failure of the operation.
         """
-        file_extension = filename.split(".")[-1]
-        return file_extension in self.valid_documents
+        try:
+            # Delete document based on document_id
+            logger.info(
+                f"Deleting document for documents id: {document_id}")
+            document_repo = DocumentRepository(database=self.mongo_client.db)
+            doc_deleted_count = await document_repo.delete_document(document_id)
+            logger.info(
+                f"{doc_deleted_count} documents deleted successfully")
+
+            # Delete embedded documents associated with document
+            logger.info(
+                f"Deleting embedded_documents for documents id: {document_id}")
+            e_documents_repo = EmbeddedDocumentRepository(
+                database=self.mongo_client.db)
+            e_doc_deleted_count = await e_documents_repo.delete_embedded_documents(
+                {'documents_id': document_id})
+            logger.info(
+                f"{e_doc_deleted_count} embedded documents deleted successfully")
+
+            return Response.success(
+                message=f"{doc_deleted_count} documents and {e_doc_deleted_count} embedded documents deleted successfully"
+            )
+        except Exception as e:
+            response, status_code = Response.failure(str(e), status_code=500)
+            raise HTTPException(
+                status_code=status_code,
+                detail=response.to_dict()
+            )
 
     async def _load_document(self, file: str, file_extension: str) -> List[Document]:
         """
@@ -114,15 +161,15 @@ class ProcessDocuments:
 
     async def _split_text_into_chunks(self, text: str, chunk_size: int) -> List[str]:
         """
-            Splits the input text into chunks of specified size.
+        Splits the input text into chunks of specified size.
 
-            Args:
-                text (str): The input text to be split into chunks.
-                chunk_size (int): The size of each chunk.
+        Args:
+            text (str): The input text to be split into chunks.
+            chunk_size (int): The size of each chunk.
 
-            Returns:
-                List[str]: A list of text chunks.
-            """
+        Returns:
+            List[str]: A list of text chunks.
+        """
         splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
             encoding_name="cl100k_base", chunk_size=chunk_size, chunk_overlap=0
         )
@@ -156,6 +203,17 @@ class ProcessDocuments:
         return folder_path, full_file_path, file_extension, file_name
 
     async def _create_vectors(self, documents: List[Document], document_id: str, file_name: str) -> List[EmbeddedDocumentModel]:
+        """
+        Create embedding vectors for the given documents.
+
+        Args:
+            documents (List[Document]): List of documents.
+            document_id (str): ID of the document.
+            file_name (str): Name of the file.
+
+        Returns:
+            List[EmbeddedDocumentModel]: List of embedded document models.
+        """
         texts = [d.page_content for d in documents]
         tokens = sum([get_token_counts(d) for d in texts])
         # model limit is 8192
@@ -193,10 +251,11 @@ class ProcessDocuments:
         Saves the document in the DocumentRepository and returns its ID.
 
         Args:
-            document (Document): The document to be saved.
+            ext (str): Extension of the document.
+            file_name (str): Name of the file.
 
         Returns:
-            str: The ID of the saved document.
+            str: ID of the saved document.
         """
         if ext not in self.valid_documents:
             raise ValueError(f"Invalid extension: {ext}")
@@ -214,6 +273,15 @@ class ProcessDocuments:
         return self._get_document_id(response)
 
     def _get_document_id(self, response):
+        """
+        Extracts the document ID from the database response.
+
+        Args:
+            response: Response from the database.
+
+        Returns:
+            str: ID of the document.
+        """
         if isinstance(response, InsertOneResult):
             return str(response.inserted_id)
         elif isinstance(response, UpdateResult):
@@ -225,3 +293,16 @@ class ProcessDocuments:
                 return None
         else:
             return None
+
+    def _check_file_type(self, filename: str) -> bool:
+        """
+        Checks if the given filename has a valid extension.
+
+        Args:
+            filename (str): The name of the file to check.
+
+        Returns:
+            bool: True if the file extension is valid, False otherwise.
+        """
+        file_extension = filename.split(".")[-1]
+        return file_extension in self.valid_documents

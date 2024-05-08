@@ -5,7 +5,7 @@ from typing import List
 import html
 from langchain_core.output_parsers import StrOutputParser
 
-from prompts import ALTERNATE_QUESTION_PROMPT, DOCUMENT_CHAT_PROMPT
+from core.prompts import ALTERNATE_QUESTION_PROMPT, DOCUMENT_CHAT_PROMPT
 
 
 class OpenAIClient:

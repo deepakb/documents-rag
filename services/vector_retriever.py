@@ -1,8 +1,8 @@
 import json
 from typing import List
-from model import ChatRequest
-from openai_client import OpenAIClient
-from database import MongoDBAtlasClient
+from core.model import ChatRequest
+from services.openai_client import OpenAIClient
+from services.database import MongoDBAtlasClient
 
 
 class VectorRetriever:
@@ -16,7 +16,7 @@ class VectorRetriever:
     Methods:
         invoke(chatRequest: ChatRequest, collections: List[str], filters: dict) -> dict: 
             Invokes OpenAI to fetch alternate questions based on the input chat request.
-        do_vector_search(collections: List[str], source: List[str], pre_filters: dict) -> str: 
+        _vector_search(collections: List[str], source: List[str], pre_filters: dict) -> str: 
             Performs vector search on the specified collections and returns results.
     """
 
@@ -44,17 +44,17 @@ class VectorRetriever:
         """
         question, filters = chatRequest
         varients = await self.openai.fetch_alternate_questions(question, 5)
-        response = await self._do_vector_search(collections, varients, filters)
+        response = await self._vector_search(collections, varients, filters)
         return response
 
-    async def _do_vector_search(self, collections: List[str], source: List[str], pre_filters: dict):
+    async def _vector_search(self, collections: List[str], source: List[str], filters: dict):
         """
         Performs vector search on the specified collections and returns results.
 
         Args:
             collections (List[str]): A list of MongoDB collections to search.
             source (List[str]): A list of strings representing vectors to search for.
-            pre_filters (dict): Filters to apply before performing the search.
+            filters (dict): Filters to apply before performing the search.
 
         Returns:
             str: A JSON string containing the search results.
@@ -81,8 +81,8 @@ class VectorRetriever:
                             "index": "rag_doc_index",
                         }
 
-                        # if pre_filters:
-                        #     params["filter"] = pre_filters
+                        if filters:
+                            params["filter"] = filters
 
                         query = {"$vectorSearch": params}
 
@@ -95,9 +95,9 @@ class VectorRetriever:
                         for res in response:
                             try:
                                 chunk_res = self.mongo_client.get(col, {"chunk_id": res['chunk_id']}, {
-                                    "raw_chunk": 1, "file_name": 1, "_id": 0}, 'single')
+                                    "raw_chunk": 1, "_id": 0}, 'single')
                                 results.append({'score': res['score'], 'text': chunk_res['raw_chunk'],
-                                                'source':  chunk_res['file_name']})
+                                                'source':  'demo.docx'})
                             except Exception as e:
                                 print(f"Error processing result: {e}")
                     except Exception as e:

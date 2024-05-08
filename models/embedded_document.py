@@ -1,10 +1,11 @@
 from datetime import datetime
 from pydantic import BaseModel, Field
 from pydantic_mongo import AbstractRepository, ObjectIdField
-from typing import Optional, List
+from typing import Optional, List, Dict, Mapping
 from pymongo.database import Database
 
-from settings import mongo
+from config.settings import mongo
+from exceptions.exceptions import EntityDoesNotExistError
 
 
 class EmbeddedDocument(BaseModel):
@@ -40,18 +41,9 @@ class EmbeddedDocumentRepository(AbstractRepository[EmbeddedDocument]):
     class Meta:
         collection_name = mongo.embedded_collection
 
-    def delete_by_field(self, document_ids: List[str], field: str) -> int:
-        """
-        Delete documents from the MongoDB collection based on provided document IDs.
-
-        Args:
-            document_ids (List[str]): The list of document IDs to delete.
-            field (str): The field to match document IDs against.
-
-        Returns:
-            int: The number of documents deleted.
-        """
+    async def delete_embedded_documents(self, filter: Mapping[str, str]) -> int:
         collection = self.get_collection()
-        result = collection.delete_many(
-            {field: {"$in": document_ids}})
-        return result.deleted_count
+        response = collection.delete_many(filter)
+        if response.deleted_count == 0:
+            raise EntityDoesNotExistError(message="Document not found")
+        return response.deleted_count
