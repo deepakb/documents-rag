@@ -7,7 +7,7 @@ from vendor.chat import get_chat_handler
 router = APIRouter()
 
 
-@router.post("/chat/", tags=["chat"], summary="Chat with AI assistant")
+@router.post("/chat/", tags=["chat"], summary="Chat with ai and get response")
 async def chat(
     chatRequest: ChatRequest,
     chat_handler: ChatHandler = Depends(get_chat_handler)

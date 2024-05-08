@@ -17,7 +17,7 @@ async def add_documents(
     return response
 
 
-@router.delete("/documents/{document_id}", tags=["documents"], summary="Delete documents by ID")
+@router.delete("/documents/{document_id}", tags=["documents"], summary="Delete document by id")
 async def delete_documents(
     document_id: str,
     doc_handler: DocumentHandler = Depends(get_document_handler)
