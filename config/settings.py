@@ -47,8 +47,9 @@ class MongoDBSettings(BaseSettings):
     """
     uri: str
     database: str
-    documents_collection: str
-    embedded_collection: str
+    documents_collection: str = "documents"
+    embedded_collection: str = "embedded_documents"
+    embedded_github: str = "embedded_github"
 
     class Config:
         env_prefix = "MONGO_"

@@ -78,6 +78,7 @@ langchain-openai==0.1.4
 langchain-text-splitters==0.0.1
 langdetect==1.0.9
 langsmith==0.1.51
+loguru==0.7.2
 lxml==4.9.2
 MarkupSafe==2.1.5
 marshmallow==3.21.1
@@ -127,6 +128,8 @@ ptyprocess==0.7.0
 pure-eval==0.2.2
 pycparser==2.22
 pydantic==2.7.1
+pydantic-mongo==2.3.0
+pydantic-settings==2.2.1
 pydantic_core==2.18.2
 Pygments==2.17.2
 pymongo==4.7.0

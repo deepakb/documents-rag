@@ -5,6 +5,7 @@ import requests
 import re
 import subprocess
 import uuid
+import glob
 from fastapi import HTTPException
 from loguru import logger
 from bson import ObjectId
@@ -14,13 +15,15 @@ from pymongo.results import InsertOneResult, UpdateResult
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from langchain_community.document_loaders import NotebookLoader, DirectoryLoader
+from rank_bm25 import BM25Okapi
 
-from utils.utils import get_token_counts
+from utils.utils import get_token_counts, clean_and_tokenize
 from services.openai_client import OpenAIClient
 from services.database import MongoDBAtlasClient
 from services.api_response import Response
 from models.embedded_document import EmbeddedDocumentRepository, EmbeddedDocument as EmbeddedDocumentModel
 from models.document import DocumentRepository, Document as DocumentModel
+from models.embedded_github import EmbeddedGithubDocument as EmbeddedGithubModel, EmbeddedGithubDocumentRepository
 
 
 class GithubHandler:
@@ -64,16 +67,27 @@ class GithubHandler:
             cloned_repo = await self._clone_github_repo(repo_url, folder_path)
 
             if cloned_repo:
-                documents = await self._load_document(folder_path)
-                print(documents)
+                # Save document for processing
+                document_id = self._create_document(
+                    'github', repo_name, repo_url)
+                if document_id is None:
+                    raise ValueError("Not able to process github repo")
 
-                # # Save document for processing
-                # document_id = self._create_document(
-                #     'github', repo_name, repo_url)
-                # if document_id is None:
-                #     raise ValueError("Not able to process github repo")
+                documents = await self._load_document(folder_path, document_id)
+                vectors = await self._create_vectors(documents)
 
-                # # Update the documet status to completed
+                # Store the embedded vectors in MongoDB Atlas
+                embedded_gh_doc_repo = EmbeddedGithubDocumentRepository(
+                    database=self.mongo_client.db)
+                embedded_gh_doc_repo.save_many(vectors)
+
+                # Delete temp folder after it's usage
+                try:
+                    shutil.rmtree(folder_path)
+                except OSError as e:
+                    print("Error: %s - %s." % (e.filename, e.strerror))
+
+                # Update the documet status to completed
                 # document_repo = DocumentRepository(
                 #     database=self.mongo_client.db)
                 # document_repo.update_document(
@@ -180,7 +194,7 @@ class GithubHandler:
         else:
             return None
 
-    async def _load_document(self, repo_path: str) -> List[Document]:
+    async def _load_document(self, repo_path: str, document_id: str):
         """
         Loads a document from the specified file based on its extension.
 
@@ -194,27 +208,37 @@ class GithubHandler:
         Raises:
             ValueError: If the file format is not supported.
         """
-        extensions = ['txt', 'md', 'markdown', 'rst', 'py', 'js', 'ts', 'java', 'c', 'cpp', 'cs', 'go', 'rb', 'php', 'scala', 'html', 'htm', 'xml', 'json',
-                      'yaml', 'yml', 'ini', 'toml', 'cfg', 'conf', 'sh', 'bash', 'css', 'scss', 'sql', 'gitignore', 'dockerignore', 'editorconfig', 'ipynb']
+        notebook_files = glob.glob(f'{repo_path}/**/*.ipynb', recursive=True)
+        other_files = glob.glob(f'{repo_path}/**/*.*', recursive=True)
+        loaded_documents = []
+        documents_dict = {}
 
-        for ext in extensions:
-            glob_pattern = f'**/*.{ext}'
-            try:
-                loader = None
-                if ext == 'ipynb':
-                    loader = NotebookLoader(
-                        str(repo_path), include_outputs=True, max_output_length=20, remove_newline=True)
-                else:
-                    loader = DirectoryLoader(repo_path, glob=glob_pattern)
+        try:
+            if notebook_files:
+                notebook_loader = NotebookLoader(repo_path)
+                notebook_documents = notebook_loader.load() if callable(notebook_loader.load) else []
+                loaded_documents.extend(notebook_documents)
 
-                documents = loader.load() if callable(loader.load) else []
-                print(documents)
-            except Exception as e:
-                print(
-                    f"Error loading files with pattern '{glob_pattern}': {e}")
-                continue
+            if other_files:
+                directory_loader = DirectoryLoader(repo_path)
+                other_documents = directory_loader.load() if callable(directory_loader.load) else []
+                loaded_documents.extend(other_documents)
 
-        return documents
+            if loaded_documents:
+                for doc in loaded_documents:
+                    file_path = doc.metadata['source']
+                    relative_path = os.path.relpath(file_path, repo_path)
+                    file_id = str(uuid.uuid4())
+                    doc.metadata['source'] = relative_path
+                    doc.metadata['file_id'] = file_id
+                    doc.metadata['document_id'] = document_id
+
+                    documents_dict[file_id] = doc
+        except Exception as e:
+            print(f"Error loading files: {e}")
+
+
+        return documents_dict
 
     async def _load_and_index_files(self, repo_path):
         extensions = ['txt', 'md', 'markdown', 'rst', 'py', 'js', 'ts', 'java', 'c', 'cpp', 'cs', 'go', 'rb', 'php', 'scala', 'html', 'htm', 'xml', 'json',
@@ -267,3 +291,90 @@ class GithubHandler:
         #         doc.page_content) for doc in split_documents]
         #     index = BM25Okapi(tokenized_documents)
         # return index, split_documents, file_type_counts, [doc.metadata['source'] for doc in split_documents]
+
+    async def _create_vectors(self, documents: dict[str, Document]) -> List[EmbeddedGithubModel]:
+        """
+        Create embedding vectors for the given documents.
+
+        Args:
+            documents (List[Document]): List of documents.
+            document_id (str): ID of the document.
+
+        Returns:
+            List[EmbeddedGithubModel]: List of embedded github document models.
+        """
+        split_documents = []
+        for _file_id, doc in documents.items():
+            texts = doc.page_content
+            tokens = get_token_counts(texts)
+            # model limit is 8192
+            chunk_size = tokens if tokens < 8100 else 8100
+            split_docs = await self._split_text_into_chunks(texts, chunk_size)
+            for split_doc in split_docs:
+                split_doc.metadata['file_id'] = doc.metadata['file_id']
+                split_doc.metadata['source'] = doc.metadata['source']
+                split_doc.metadata['document_id'] = doc.metadata['document_id']
+
+            split_documents.extend(split_docs)
+
+        index = None
+        if split_documents:
+            tokenized_documents = [clean_and_tokenize(
+                doc.page_content) for doc in split_documents]
+            index = BM25Okapi(tokenized_documents)
+        return index, split_documents, file_type_counts, [doc.metadata['source'] for doc in split_documents]
+
+        # vectors = []
+        # doc_id = 1
+
+        # for d in documents:
+        #     texts = d.page_content
+        #     tokens = get_token_counts(texts)
+        #     # model limit is 8192
+        #     chunk_size = tokens if tokens < 8100 else 8100
+        #     chunks = await self._split_text_into_chunks([texts], chunk_size)
+
+        #     created_at = datetime.datetime.now()
+        #     expires_at = created_at + datetime.timedelta(days=1)
+
+        #     for chunk in chunks:
+        #         unique_id = document_id + '-' + str(doc_id)
+        #         token_count = get_token_counts(chunk)
+        #         vector_text = await self.openai.create_embedding(chunk)
+                
+        #         # Access metadata from the document
+        #         metadata = d.metadata
+                
+        #         vectors.append(
+        #             EmbeddedGithubModel(
+        #                 id=ObjectId(),
+        #                 chunk_id=unique_id,
+        #                 document_id=document_id,
+        #                 raw_chunk=chunk,
+        #                 vector_chunk=vector_text[0],
+        #                 token_count=token_count,
+        #                 created_at=created_at,
+        #                 expires_at=expires_at,
+        #                 metadata=metadata
+        #             )
+        #         )
+        #         doc_id += 1
+
+        # return vectors
+    
+    async def _split_text_into_chunks(self, text: str, chunk_size: int) -> List[str]:
+        """
+        Splits the input text into chunks of specified size.
+
+        Args:
+            text (str): The input text to be split into chunks.
+            chunk_size (int): The size of each chunk.
+
+        Returns:
+            List[str]: A list of text chunks.
+        """
+        splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
+            encoding_name="cl100k_base", chunk_size=chunk_size, chunk_overlap=100
+        )
+        chunks = splitter.split_text(text)
+        return chunks
