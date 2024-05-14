@@ -75,11 +75,12 @@ class GithubHandler:
 
                 documents = await self._load_document(folder_path, document_id)
                 vectors = await self._create_vectors(documents)
+                print(vectors)
 
                 # Store the embedded vectors in MongoDB Atlas
-                embedded_gh_doc_repo = EmbeddedGithubDocumentRepository(
-                    database=self.mongo_client.db)
-                embedded_gh_doc_repo.save_many(vectors)
+                # embedded_gh_doc_repo = EmbeddedGithubDocumentRepository(
+                #    database=self.mongo_client.db)
+                # embedded_gh_doc_repo.save_many(vectors)
 
                 # Delete temp folder after it's usage
                 try:
@@ -216,7 +217,8 @@ class GithubHandler:
         try:
             if notebook_files:
                 notebook_loader = NotebookLoader(repo_path)
-                notebook_documents = notebook_loader.load() if callable(notebook_loader.load) else []
+                notebook_documents = notebook_loader.load(
+                ) if callable(notebook_loader.load) else []
                 loaded_documents.extend(notebook_documents)
 
             if other_files:
@@ -236,7 +238,6 @@ class GithubHandler:
                     documents_dict[file_id] = doc
         except Exception as e:
             print(f"Error loading files: {e}")
-
 
         return documents_dict
 
@@ -311,18 +312,22 @@ class GithubHandler:
             chunk_size = tokens if tokens < 8100 else 8100
             split_docs = await self._split_text_into_chunks(texts, chunk_size)
             for split_doc in split_docs:
-                split_doc.metadata['file_id'] = doc.metadata['file_id']
-                split_doc.metadata['source'] = doc.metadata['source']
-                split_doc.metadata['document_id'] = doc.metadata['document_id']
-
-            split_documents.extend(split_docs)
+                s_doc = {
+                    "page_content": split_doc,
+                    "metadata": doc.metadata
+                }
+                # Print s_doc to inspect its value
+                split_documents.append(s_doc)
 
         index = None
         if split_documents:
             tokenized_documents = [clean_and_tokenize(
-                doc.page_content) for doc in split_documents]
+                doc['page_content']) for doc in split_documents]
+            print(tokenized_documents)
             index = BM25Okapi(tokenized_documents)
-        return index, split_documents, file_type_counts, [doc.metadata['source'] for doc in split_documents]
+            print(index)
+            print('===')
+        # return index, split_documents, file_type_counts, [doc.metadata['source'] for doc in split_documents]
 
         # vectors = []
         # doc_id = 1
@@ -341,10 +346,10 @@ class GithubHandler:
         #         unique_id = document_id + '-' + str(doc_id)
         #         token_count = get_token_counts(chunk)
         #         vector_text = await self.openai.create_embedding(chunk)
-                
+
         #         # Access metadata from the document
         #         metadata = d.metadata
-                
+
         #         vectors.append(
         #             EmbeddedGithubModel(
         #                 id=ObjectId(),
@@ -361,7 +366,7 @@ class GithubHandler:
         #         doc_id += 1
 
         # return vectors
-    
+
     async def _split_text_into_chunks(self, text: str, chunk_size: int) -> List[str]:
         """
         Splits the input text into chunks of specified size.
@@ -374,7 +379,7 @@ class GithubHandler:
             List[str]: A list of text chunks.
         """
         splitter = RecursiveCharacterTextSplitter.from_tiktoken_encoder(
-            encoding_name="cl100k_base", chunk_size=chunk_size, chunk_overlap=100
+            encoding_name="cl100k_base", chunk_size=chunk_size, chunk_overlap=0
         )
         chunks = splitter.split_text(text)
         return chunks
